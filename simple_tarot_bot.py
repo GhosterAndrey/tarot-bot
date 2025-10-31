@@ -17,6 +17,34 @@ from datetime import datetime
 import requests
 import sqlite3
 
+# =========================
+# Мини HTTP-сервер для Render Web Service (health check на $PORT)
+# =========================
+# Это нужно только для хостинга как Web Service. На VPS/Docker это не мешает.
+try:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    class _HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+        # убрать лишний шум в логах
+        def log_message(self, format, *args):
+            return
+
+    def _run_health_server():
+        try:
+            port = int(os.environ.get("PORT", "10000"))
+            httpd = HTTPServer(("0.0.0.0", port), _HealthHandler)
+            httpd.serve_forever()
+        except Exception:
+            pass
+
+    threading.Thread(target=_run_health_server, daemon=True).start()
+except Exception:
+    # если вдруг http.server недоступен — просто игнорируем
+    pass
+
 
 # =========================
 # Логирование
@@ -46,7 +74,7 @@ def _env(key: str, default: Optional[str] = None) -> Optional[str]:
     return v if v else default
 
 # Токен — из ENV или впишите прямо сюда
-BOT_TOKEN: str = _env("TELEGRAM_BOT_TOKEN", "8385862376:AAHl8FE_yeMNnA8JtOe6r--Fsb_9oFJhcxw")
+BOT_TOKEN: str = _env("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # Админы из ENV (опционально, можно добавлять через скрытую команду)
 _admin_env = _env("ADMIN_IDS", "")
@@ -61,7 +89,7 @@ else:
 # Постоянный секрет /iamadmin_<код>:
 ADMIN_SECRET_ENV: Optional[str] = _env("ADMIN_SECRET", None)
 
-DB_PATH = "simple_tarot.db"
+DB_PATH = _env("DB_PATH", "simple_tarot.db")  # можно пробросить /data/simple_tarot.db на Render
 
 # Быстрый выход
 API_CONNECT_TIMEOUT = int(_env("API_CONNECT_TIMEOUT", "5"))
@@ -514,7 +542,7 @@ class SimpleTarotBot:
                 body = resp.text
             except Exception:
                 pass
-            # 403 означает, что пользователь заблокировал бота — пометим
+            # 403 — пользователь заблокировал бота
             if "403" in str(e):
                 try:
                     self.storage.mark_user_blocked(int(chat_id))
@@ -571,7 +599,7 @@ class SimpleTarotBot:
             "🎴 <b>Добро пожаловать в Таро-бот!</b>\n\n"
             "Я предлагаю активации по арканам Таро.\n\n"
             "<b>Команды:</b>\n"
-            "/apply — Выбрать аркан для консультации\n"
+            "/apply — Выбрать аркан для активации\n"
             "/my_applications — Мои заявки\n"
             "/price — Узнать стоимость"
         )
@@ -579,7 +607,7 @@ class SimpleTarotBot:
     def text_price(self) -> str:
         s = PRICE_SERVICE
         return (
-            "💰 <b>СТОИМОСТЬ УСЛУГИ</b>\n\n"
+            "💰 <b>СТОИМОСТЬ УСЛУГИ</б>\n\n"
             f"<b>{escape(s['name'])}</b>\n"
             f"💵 Стоимость: {escape(s['price'])}\n"
             f"📝 {escape(s['description'])}\n\n"
@@ -630,7 +658,6 @@ class SimpleTarotBot:
                 fail += 1
             self.stop_event.wait(SLEEP_BETWEEN_BROADCAST)
 
-        # Сообщим админам
         info = (
             "🛠 Технический режим включён.\n"
             f"Рассылка отправлена: ok={ok}, fail={fail}, всего пользователей={total}.\n"
@@ -641,7 +668,6 @@ class SimpleTarotBot:
 
     def maintenance_disable(self, admin_id: int) -> None:
         self.storage.set_setting("maintenance_enabled", "0")
-        # не очищаем текст — пригодится в следующий раз
         for aid in self.combined_admin_ids():
             self.send_message(aid, "🟢 Технический режим выключен.")
 
@@ -649,7 +675,6 @@ class SimpleTarotBot:
 
     def handle_start(self, chat_id: int) -> None:
         self.send_message(chat_id, self.text_welcome())
-        # Если тех.режим включен — отправим и объявление
         if self.maintenance_enabled():
             self.send_message(chat_id, f"⚙️ <b>Технический перерыв</b>\n\n{escape(self.maintenance_text())}")
 
@@ -680,7 +705,7 @@ class SimpleTarotBot:
                 f"🎴 Аркан: {escape(arcana_text)}\n"
                 f"💰 Стоимость: {escape(PRICE_SERVICE['price'])}\n"
                 f"📊 Статус: {STATUSES['new']}\n\n"
-                "Мы свяжемся с вами для уточнения деталей активации.\n\n"
+                "Мы свяжемся с вами для уточнения деталей активация.\n\n"
                 "💎 <i>Для оплаты и уточнений используйте команду /price</i>"
             ),
             reply_markup={"remove_keyboard": True},
@@ -718,7 +743,7 @@ class SimpleTarotBot:
     def show_all_applications(self, chat_id: int) -> None:
         apps = self.storage.list_all_applications()
         if not apps:
-            self.send_message(chat_id, "📭 Заявок на активациб нет.")
+            self.send_message(chat_id, "📭 Заявок на активацию нет.")
             return
 
         new_count = sum(1 for r in apps if r["status"] == "new")
@@ -830,7 +855,6 @@ class SimpleTarotBot:
         if text.strip() == "-":
             text = self.storage.get_setting("maintenance_text") or \
                    "🛠 Временно проводим технические работы. Возможны задержки или недоступность. Благодарим за понимание!"
-        # Включаем и рассылаем
         self.maintenance_enable(text.strip(), admin_id)
         self.send_message(chat_id, "✅ Технический режим включён и сообщение разослано всем известным пользователям.")
 
@@ -883,7 +907,6 @@ class SimpleTarotBot:
             self.answer_callback(cq_id, "Выключено")
             return
 
-        # no-op fallback
         if data == "noop":
             self.answer_callback(cq_id, "Используйте /maintenance_on")
             return
@@ -915,7 +938,7 @@ class SimpleTarotBot:
         if not text:
             return
 
-        # Учет пользователя в таблице users
+        # Учет пользователя
         try:
             self.storage.upsert_user(
                 user_id,
@@ -960,7 +983,7 @@ class SimpleTarotBot:
             self.show_user_applications(chat_id, user)
             return
 
-        # Админ‑команды (заявки)
+        # Админ-команды
         if text == "/list" and self.is_admin(user_id):
             self.show_all_applications(chat_id)
             return
@@ -978,7 +1001,7 @@ class SimpleTarotBot:
             self.send_message(chat_id, "👮 Активные админы: " + ", ".join(map(str, ids)) if ids else "👮 Нет активных админов.")
             return
 
-        # Админ‑команды (технический режим)
+        # Технический режим
         if text == "/maintenance_on" and self.is_admin(user_id):
             self.maintenance_on_start(chat_id, user_id)
             return
@@ -1007,7 +1030,7 @@ class SimpleTarotBot:
             self.handle_arcana_selection(chat_id, user, text)
             return
 
-        # Нераспознанное — только пользовательские команды
+        # Нераспознанное
         if text.startswith("/"):
             self.send_message(
                 chat_id,
