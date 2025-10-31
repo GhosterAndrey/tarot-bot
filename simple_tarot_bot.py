@@ -570,7 +570,7 @@ class SimpleTarotBot:
     def text_price(self) -> str:
         s = PRICE_SERVICE
         return (
-            "💰 <b>СТОИМОСТЬ УСЛУГИ</б>\n\n"
+            "💰 <b>СТОИМОСТЬ УСЛУГИ</b>\n\n"  # ← тут было </б>, стало </b>
             f"<b>{escape(s['name'])}</b>\n"
             f"💵 Стоимость: {escape(s['price'])}\n"
             f"📝 {escape(s['description'])}\n\n"
